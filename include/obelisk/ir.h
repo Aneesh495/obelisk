@@ -44,6 +44,8 @@ typedef struct {
  * Compiled program container holding linearized IR instructions,
  * metadata, and symbol table.
  */
+typedef struct ObeliskProgram ObeliskProgram;
+
 struct ObeliskProgram {
     IrInstruction *instructions;
     size_t count;
@@ -59,6 +61,8 @@ ObeliskProgram *obelisk_program_create(size_t initial_capacity);
 void obelisk_program_free(ObeliskProgram *program);
 bool obelisk_program_append(ObeliskProgram *program, IrInstruction instr);
 void obelisk_program_dump(const ObeliskProgram *program);
+bool obelisk_parse_source(const char *source, size_t source_len, ObeliskProgram **out_program);
+char *obelisk_ir_to_brainfuck(const ObeliskProgram *program);
 
 #ifdef __cplusplus
 }
