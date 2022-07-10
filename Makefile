@@ -1,5 +1,5 @@
 CC ?= clang
-CFLAGS ?= -std=c11 -Wall -Wextra -Wpedantic -O3 -g -Iinclude
+CFLAGS ?= -std=c11 -Wall -Wextra -Wpedantic -Wno-gnu-label-as-value -O3 -g -Iinclude
 LDFLAGS ?= -lpthread
 
 # Architecture detection

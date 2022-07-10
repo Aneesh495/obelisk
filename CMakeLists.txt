@@ -6,7 +6,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 
 # Optimization and warning flags
-add_compile_options(-Wall -Wextra -Wpedantic -O3 -g)
+add_compile_options(-Wall -Wextra -Wpedantic -Wno-gnu-label-as-value -O3 -g)
 
 # Platform architecture detection
 if(APPLE)
