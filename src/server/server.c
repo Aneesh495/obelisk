@@ -142,7 +142,7 @@ bool obelisk_parse_command_line(const char *line, size_t len, ObeliskCommand *ou
 /*
  * In-memory transactional key-value store structure.
  */
-#define OBELISK_STORE_CAPACITY 4096
+#define OBELISK_STORE_CAPACITY 16384
 
 typedef struct {
     char key[OBELISK_MAX_KEY_LEN];
@@ -167,20 +167,20 @@ typedef struct {
     pthread_mutex_t lock;
 } ObeliskStorageEngine;
 
-static ObeliskStorageEngine g_storage;
-static bool g_storage_initialized = false;
+static ObeliskStorageEngine *g_storage = NULL;
 
 static void storage_init(void) {
-    if (!g_storage_initialized) {
-        memset(&g_storage, 0, sizeof(g_storage));
-        pthread_mutex_init(&g_storage.lock, NULL);
-        g_storage_initialized = true;
+    if (!g_storage) {
+        g_storage = (ObeliskStorageEngine *)calloc(1, sizeof(ObeliskStorageEngine));
+        if (g_storage) {
+            pthread_mutex_init(&g_storage->lock, NULL);
+        }
     }
 }
 
 static int storage_find_index(const char *key) {
     for (size_t i = 0; i < OBELISK_STORE_CAPACITY; ++i) {
-        if (g_storage.records[i].occupied && strcmp(g_storage.records[i].key, key) == 0) {
+        if (g_storage->records[i].occupied && strcmp(g_storage->records[i].key, key) == 0) {
             return (int)i;
         }
     }
@@ -188,16 +188,16 @@ static int storage_find_index(const char *key) {
 }
 
 static bool storage_set(const char *key, const char *val) {
-    pthread_mutex_lock(&g_storage.lock);
+    pthread_mutex_lock(&g_storage->lock);
     int idx = storage_find_index(key);
 
     /* Record in WAL if inside transaction */
-    if (g_storage.in_transaction && g_storage.wal_count < 1024) {
-        ObeliskWalEntry *we = &g_storage.wal[g_storage.wal_count++];
+    if (g_storage->in_transaction && g_storage->wal_count < 1024) {
+        ObeliskWalEntry *we = &g_storage->wal[g_storage->wal_count++];
         strncpy(we->key, key, OBELISK_MAX_KEY_LEN - 1);
         if (idx >= 0) {
             we->existed = true;
-            strncpy(we->prev_value, g_storage.records[idx].value, OBELISK_MAX_VALUE_LEN - 1);
+            strncpy(we->prev_value, g_storage->records[idx].value, OBELISK_MAX_VALUE_LEN - 1);
         } else {
             we->existed = false;
             we->prev_value[0] = '\0';
@@ -205,91 +205,91 @@ static bool storage_set(const char *key, const char *val) {
     }
 
     if (idx >= 0) {
-        strncpy(g_storage.records[idx].value, val, OBELISK_MAX_VALUE_LEN - 1);
-        g_storage.records[idx].version = ++g_storage.current_version;
-        pthread_mutex_unlock(&g_storage.lock);
+        strncpy(g_storage->records[idx].value, val, OBELISK_MAX_VALUE_LEN - 1);
+        g_storage->records[idx].version = ++g_storage->current_version;
+        pthread_mutex_unlock(&g_storage->lock);
         return true;
     }
 
     for (size_t i = 0; i < OBELISK_STORE_CAPACITY; ++i) {
-        if (!g_storage.records[i].occupied) {
-            g_storage.records[i].occupied = true;
-            strncpy(g_storage.records[i].key, key, OBELISK_MAX_KEY_LEN - 1);
-            strncpy(g_storage.records[i].value, val, OBELISK_MAX_VALUE_LEN - 1);
-            g_storage.records[i].version = ++g_storage.current_version;
-            g_storage.count++;
-            pthread_mutex_unlock(&g_storage.lock);
+        if (!g_storage->records[i].occupied) {
+            g_storage->records[i].occupied = true;
+            strncpy(g_storage->records[i].key, key, OBELISK_MAX_KEY_LEN - 1);
+            strncpy(g_storage->records[i].value, val, OBELISK_MAX_VALUE_LEN - 1);
+            g_storage->records[i].version = ++g_storage->current_version;
+            g_storage->count++;
+            pthread_mutex_unlock(&g_storage->lock);
             return true;
         }
     }
 
-    pthread_mutex_unlock(&g_storage.lock);
+    pthread_mutex_unlock(&g_storage->lock);
     return false;
 }
 
 static bool storage_get(const char *key, char *out_val, size_t max_len) {
-    pthread_mutex_lock(&g_storage.lock);
+    pthread_mutex_lock(&g_storage->lock);
     int idx = storage_find_index(key);
     if (idx >= 0) {
-        strncpy(out_val, g_storage.records[idx].value, max_len - 1);
+        strncpy(out_val, g_storage->records[idx].value, max_len - 1);
         out_val[max_len - 1] = '\0';
-        pthread_mutex_unlock(&g_storage.lock);
+        pthread_mutex_unlock(&g_storage->lock);
         return true;
     }
-    pthread_mutex_unlock(&g_storage.lock);
+    pthread_mutex_unlock(&g_storage->lock);
     return false;
 }
 
 static bool storage_del(const char *key) {
-    pthread_mutex_lock(&g_storage.lock);
+    pthread_mutex_lock(&g_storage->lock);
     int idx = storage_find_index(key);
     if (idx >= 0) {
-        if (g_storage.in_transaction && g_storage.wal_count < 1024) {
-            ObeliskWalEntry *we = &g_storage.wal[g_storage.wal_count++];
+        if (g_storage->in_transaction && g_storage->wal_count < 1024) {
+            ObeliskWalEntry *we = &g_storage->wal[g_storage->wal_count++];
             strncpy(we->key, key, OBELISK_MAX_KEY_LEN - 1);
             we->existed = true;
-            strncpy(we->prev_value, g_storage.records[idx].value, OBELISK_MAX_VALUE_LEN - 1);
+            strncpy(we->prev_value, g_storage->records[idx].value, OBELISK_MAX_VALUE_LEN - 1);
         }
-        g_storage.records[idx].occupied = false;
-        g_storage.records[idx].key[0] = '\0';
-        g_storage.records[idx].value[0] = '\0';
-        g_storage.count--;
-        pthread_mutex_unlock(&g_storage.lock);
+        g_storage->records[idx].occupied = false;
+        g_storage->records[idx].key[0] = '\0';
+        g_storage->records[idx].value[0] = '\0';
+        g_storage->count--;
+        pthread_mutex_unlock(&g_storage->lock);
         return true;
     }
-    pthread_mutex_unlock(&g_storage.lock);
+    pthread_mutex_unlock(&g_storage->lock);
     return false;
 }
 
 static void storage_rollback(void) {
-    pthread_mutex_lock(&g_storage.lock);
-    while (g_storage.wal_count > 0) {
-        ObeliskWalEntry *we = &g_storage.wal[--g_storage.wal_count];
+    pthread_mutex_lock(&g_storage->lock);
+    while (g_storage->wal_count > 0) {
+        ObeliskWalEntry *we = &g_storage->wal[--g_storage->wal_count];
         int idx = storage_find_index(we->key);
         if (we->existed) {
             if (idx >= 0) {
-                strncpy(g_storage.records[idx].value, we->prev_value, OBELISK_MAX_VALUE_LEN - 1);
+                strncpy(g_storage->records[idx].value, we->prev_value, OBELISK_MAX_VALUE_LEN - 1);
             } else {
                 /* Re-insert deleted record */
                 for (size_t i = 0; i < OBELISK_STORE_CAPACITY; ++i) {
-                    if (!g_storage.records[i].occupied) {
-                        g_storage.records[i].occupied = true;
-                        strncpy(g_storage.records[i].key, we->key, OBELISK_MAX_KEY_LEN - 1);
-                        strncpy(g_storage.records[i].value, we->prev_value, OBELISK_MAX_VALUE_LEN - 1);
-                        g_storage.count++;
+                    if (!g_storage->records[i].occupied) {
+                        g_storage->records[i].occupied = true;
+                        strncpy(g_storage->records[i].key, we->key, OBELISK_MAX_KEY_LEN - 1);
+                        strncpy(g_storage->records[i].value, we->prev_value, OBELISK_MAX_VALUE_LEN - 1);
+                        g_storage->count++;
                         break;
                     }
                 }
             }
         } else {
             if (idx >= 0) {
-                g_storage.records[idx].occupied = false;
-                g_storage.count--;
+                g_storage->records[idx].occupied = false;
+                g_storage->count--;
             }
         }
     }
-    g_storage.in_transaction = false;
-    pthread_mutex_unlock(&g_storage.lock);
+    g_storage->in_transaction = false;
+    pthread_mutex_unlock(&g_storage->lock);
 }
 
 static void handle_client_command(ObeliskSession *session, const char *line, size_t len) {
@@ -335,24 +335,24 @@ static void handle_client_command(ObeliskSession *session, const char *line, siz
             break;
 
         case CMD_COUNT:
-            pthread_mutex_lock(&g_storage.lock);
-            snprintf(resp, sizeof(resp), ":%zu\r\n", g_storage.count);
-            pthread_mutex_unlock(&g_storage.lock);
+            pthread_mutex_lock(&g_storage->lock);
+            snprintf(resp, sizeof(resp), ":%zu\r\n", g_storage->count);
+            pthread_mutex_unlock(&g_storage->lock);
             break;
 
         case CMD_SCAN: {
-            pthread_mutex_lock(&g_storage.lock);
+            pthread_mutex_lock(&g_storage->lock);
             size_t matching = 0;
             char list_buf[4096];
             list_buf[0] = '\0';
             size_t prefix_len = strlen(cmd.key);
 
             for (size_t i = 0; i < OBELISK_STORE_CAPACITY; ++i) {
-                if (g_storage.records[i].occupied) {
-                    if (prefix_len == 0 || strncmp(g_storage.records[i].key, cmd.key, prefix_len) == 0) {
+                if (g_storage->records[i].occupied) {
+                    if (prefix_len == 0 || strncmp(g_storage->records[i].key, cmd.key, prefix_len) == 0) {
                         char item[512];
                         snprintf(item, sizeof(item), "$%zu\r\n%s\r\n",
-                                 strlen(g_storage.records[i].key), g_storage.records[i].key);
+                                 strlen(g_storage->records[i].key), g_storage->records[i].key);
                         if (strlen(list_buf) + strlen(item) < sizeof(list_buf) - 64) {
                             strcat(list_buf, item);
                             matching++;
@@ -360,26 +360,26 @@ static void handle_client_command(ObeliskSession *session, const char *line, siz
                     }
                 }
             }
-            pthread_mutex_unlock(&g_storage.lock);
+            pthread_mutex_unlock(&g_storage->lock);
             snprintf(resp, sizeof(resp), "*%zu\r\n%s", matching, list_buf);
             break;
         }
 
         case CMD_TXN_BEGIN:
             session->in_transaction = true;
-            pthread_mutex_lock(&g_storage.lock);
-            g_storage.in_transaction = true;
-            g_storage.wal_count = 0;
-            pthread_mutex_unlock(&g_storage.lock);
+            pthread_mutex_lock(&g_storage->lock);
+            g_storage->in_transaction = true;
+            g_storage->wal_count = 0;
+            pthread_mutex_unlock(&g_storage->lock);
             snprintf(resp, sizeof(resp), "+OK\r\n");
             break;
 
         case CMD_TXN_COMMIT:
             session->in_transaction = false;
-            pthread_mutex_lock(&g_storage.lock);
-            g_storage.in_transaction = false;
-            g_storage.wal_count = 0;
-            pthread_mutex_unlock(&g_storage.lock);
+            pthread_mutex_lock(&g_storage->lock);
+            g_storage->in_transaction = false;
+            g_storage->wal_count = 0;
+            pthread_mutex_unlock(&g_storage->lock);
             snprintf(resp, sizeof(resp), "+OK\r\n");
             break;
 
@@ -390,11 +390,11 @@ static void handle_client_command(ObeliskSession *session, const char *line, siz
             break;
 
         case CMD_STATS:
-            pthread_mutex_lock(&g_storage.lock);
+            pthread_mutex_lock(&g_storage->lock);
             snprintf(resp, sizeof(resp),
                      "+OK records=%zu version=%u wal_entries=%zu\r\n",
-                     g_storage.count, g_storage.current_version, g_storage.wal_count);
-            pthread_mutex_unlock(&g_storage.lock);
+                     g_storage->count, g_storage->current_version, g_storage->wal_count);
+            pthread_mutex_unlock(&g_storage->lock);
             break;
 
         case CMD_COMPACT:
