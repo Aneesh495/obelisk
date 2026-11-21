@@ -6,6 +6,11 @@ LDFLAGS ?= -lpthread
 UNAME_M := $(shell uname -m)
 UNAME_S := $(shell uname -s)
 
+ifeq ($(UNAME_S),Linux)
+    # Strict C11 hides libc interfaces such as CLOCK_MONOTONIC and MAP_ANONYMOUS.
+    CFLAGS += -D_DEFAULT_SOURCE
+endif
+
 ifeq ($(UNAME_M),arm64)
     CFLAGS += -DOBELISK_TARGET_ARM64=1
 else ifeq ($(UNAME_M),aarch64)
